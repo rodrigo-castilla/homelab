@@ -1,0 +1,167 @@
+services:
+
+  # --- EL RECEPCIONISTA (Traefik v3) ---
+  traefik:
+    image: traefik:v3.0
+    container_name: traefik
+    ports:
+      - "80:80"
+      - "8443:8443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command:
+      - "--api.dashboard=true"
+      - "--api.insecure=false"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.admin_secure.address=:8443"
+    restart: unless-stopped
+    environment:
+      - TZ=${TIMEZONE}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik.rule=Host(`${DOMAIN_TRAEFIK}`)"
+      - "traefik.http.routers.traefik.service=api@internal"
+      - "traefik.http.routers.traefik.entrypoints=admin_secure"
+
+  # --- HOMEPAGE (Privado) ---
+  homepage:
+    image: ghcr.io/gethomepage/homepage:latest
+    container_name: homepage
+    volumes:
+      - ./data/homepage/config:/app/config
+      - ./data/homepage/images:/app/public/images
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: unless-stopped
+    environment:
+      - TZ=${TIMEZONE}
+      - HOMEPAGE_ALLOWED_HOSTS=*
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.homepage.rule=Host(`${DOMAIN_HOMEPAGE}`)"
+      - "traefik.http.routers.homepage.entrypoints=admin_secure"
+      - "traefik.http.services.homepage.loadbalancer.server.port=3000"
+
+  # --- ADGUARD (Privado) ---
+  adguard:
+    image: adguard/adguardhome
+    container_name: adguard
+    restart: unless-stopped
+    ports:
+      - "53:53/tcp"
+      - "53:53/udp"
+    volumes:
+      - ./data/adguard/work:/opt/adguardhome/work
+      - ./data/adguard/conf:/opt/adguardhome/conf
+    environment:
+      - TZ=${TIMEZONE}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.adguard.rule=Host(`${DOMAIN_ADGUARD}`)"
+      - "traefik.http.routers.adguard.entrypoints=admin_secure"
+      - "traefik.http.services.adguard.loadbalancer.server.port=80"
+
+  # --- MEMOS (Privado) ---
+  memos:
+    image: neosmemo/memos:stable
+    container_name: memos
+    restart: unless-stopped
+    volumes:
+      - ./data/memos:/var/opt/memos
+    environment:
+      - TZ=${TIMEZONE}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.memos.rule=Host(`${DOMAIN_MEMOS}`)"
+      - "traefik.http.routers.memos.entrypoints=admin_secure"
+      - "traefik.http.services.memos.loadbalancer.server.port=5230"
+
+  # --- EL CEREBRO n8n (Privado) ---
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n
+    restart: unless-stopped
+    volumes:
+      - ./data/n8n:/home/node/.n8n
+    environment:
+      - TZ=${TIMEZONE}
+      - N8N_HOST=${DOMAIN_N8N}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=http://${DOMAIN_N8N}:8443/
+      - N8N_SECURE_COOKIE=false
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.n8n.rule=Host(`${DOMAIN_N8N}`)"
+      - "traefik.http.routers.n8n.entrypoints=admin_secure"
+      - "traefik.http.services.n8n.loadbalancer.server.port=5678"
+
+  # --- LA WEB CREATIVA (Pública - WordPress) ---
+  wordpress_db:
+    image: mariadb:latest
+    container_name: wordpress_db
+    restart: unless-stopped
+    environment:
+      - MYSQL_ROOT_PASSWORD=${WORDPRESS_DB_ROOT_PASSWORD}
+      - MYSQL_DATABASE=${WORDPRESS_DB_NAME}
+      - MYSQL_USER=${WORDPRESS_DB_USER}
+      - MYSQL_PASSWORD=${WORDPRESS_DB_PASSWORD}
+    volumes:
+      - ./data/wordpress/db:/var/lib/mysql
+
+  wordpress:
+    image: wordpress:latest
+    container_name: wordpress
+    restart: unless-stopped
+    depends_on:
+      - wordpress_db
+    volumes:
+      - ./data/wordpress/html:/var/www/html
+      - ./data/wordpress/uploads.ini:/usr/local/etc/php/conf.d/uploads.ini
+    environment:
+      - WORDPRESS_DB_HOST=wordpress_db:3306
+      - WORDPRESS_DB_USER=${WORDPRESS_DB_USER}
+      - WORDPRESS_DB_PASSWORD=${WORDPRESS_DB_PASSWORD}
+      - WORDPRESS_DB_NAME=${WORDPRESS_DB_NAME}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.wordpress.rule=Host(`${DOMAIN_WORDPRESS}`)"
+      - "traefik.http.routers.wordpress.entrypoints=web" 
+      - "traefik.http.services.wordpress.loadbalancer.server.port=80"
+
+  # --- FILEBROWSER (Público) ---
+  filebrowser:
+    image: filebrowser/filebrowser:latest
+    container_name: filebrowser
+    restart: unless-stopped
+    volumes:
+      - /mnt/almacen:/srv
+      - ./data/filebrowser/filebrowser.db:/database.db
+    environment:
+      - FB_DATABASE=/database.db
+      - FB_ROOT=/srv
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.filebrowser.rule=Host(`${DOMAIN_FILES}`)"
+      - "traefik.http.routers.filebrowser.entrypoints=web"
+      - "traefik.http.services.filebrowser.loadbalancer.server.port=80"
+
+  # --- FRESHRSS (Público) ---
+  freshrss:
+    image: freshrss/freshrss:latest
+    container_name: freshrss
+    restart: unless-stopped
+    ports:
+      - "3333:80"
+    volumes:
+      - ./data/freshrss/data:/var/www/FreshRSS/data
+      - ./data/freshrss/extensions:/var/www/FreshRSS/extensions
+    environment:
+      - TZ=${TIMEZONE}
+      - CRON_MIN=*/20
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.freshrss.rule=Host(`${DOMAIN_RSS}`)"
+      - "traefik.http.routers.freshrss.entrypoints=web"
+      - "traefik.http.services.freshrss.loadbalancer.server.port=80"
